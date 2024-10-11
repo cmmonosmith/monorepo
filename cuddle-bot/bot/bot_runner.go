@@ -61,3 +61,10 @@ func newMessage(session *discordgo.Session, message *discordgo.MessageCreate) {
 func interactionCreate(session *discordgo.Session, interaction *discordgo.InteractionCreate) {
 	instance.interactionCreate(session, interaction)
 }
+
+// channelMessageSend wraps the session function to log any errors
+func channelMessageSend(session *discordgo.Session, channelID string, message string) {
+	if _, err := session.ChannelMessageSend(channelID, message); err != nil {
+		slog.Error("failed to send channel message", slog.Any("error", err))
+	}
+}

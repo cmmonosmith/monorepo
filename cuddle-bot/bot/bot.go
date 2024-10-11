@@ -54,17 +54,17 @@ func (b *bot) newMessage(session *discordgo.Session, message *discordgo.MessageC
 
 	// evaluate the rest of the message
 	if len(parts) == 1 {
-		session.ChannelMessageSend(message.ChannelID, "you have to tell me what you want :weary:")
+		channelMessageSend(session, message.ChannelID, "you have to tell me what you want :weary:")
 		return
 	}
 	parts = parts[1:]
 	switch {
 	case parts[0] == "hi":
-		session.ChannelMessageSend(message.ChannelID, "sup sup :sunglasses:")
+		channelMessageSend(session, message.ChannelID, "sup sup :sunglasses:")
 	case parts[0] == "asciify":
 		b.asciify(session, message)
 	default:
-		session.ChannelMessageSend(message.ChannelID, "sorry, i don't follow :sweat_smile:")
+		channelMessageSend(session, message.ChannelID, "sorry, i don't follow :sweat_smile:")
 	}
 }
 
@@ -72,22 +72,22 @@ func (b *bot) newMessage(session *discordgo.Session, message *discordgo.MessageC
 // deletes the download
 func (b *bot) asciify(session *discordgo.Session, message *discordgo.MessageCreate) {
 	if len(message.Attachments) == 0 {
-		session.ChannelMessageSend(message.ChannelID, "i can't asciify what you don't send me :disappointed:")
+		channelMessageSend(session, message.ChannelID, "i can't asciify what you don't send me :disappointed:")
 		return
 	} else if len(message.Attachments) > 1 {
-		session.ChannelMessageSend(message.ChannelID, "only send me one attachment, please... :weary:")
+		channelMessageSend(session, message.ChannelID, "only send me one attachment, please... :weary:")
 		return
 	}
 	attachment := message.Attachments[0]
 	if attachment.ContentType != "image/png" {
-		session.ChannelMessageSend(message.ChannelID, "i can only asciify .png attachments :weary:")
+		channelMessageSend(session, message.ChannelID, "i can only asciify .png attachments :weary:")
 		return
 	}
 
 	filename := fmt.Sprintf("%s.png", uuid.New().String())
 	if err := b.download(attachment.URL, filename); err != nil {
 		slog.Error("failed to download attachment", slog.Any("error", err))
-		session.ChannelMessageSend(message.ChannelID, ":x: sorry, i couldn't download your image :grimmace:")
+		channelMessageSend(session, message.ChannelID, ":x: sorry, i couldn't download your image :grimmace:")
 		return
 	}
 	defer os.Remove(filename)
@@ -95,10 +95,10 @@ func (b *bot) asciify(session *discordgo.Session, message *discordgo.MessageCrea
 	ascii, err := asciify.Asciify(filename, 40, 40) // keep it well under the 2000 character limit for non-Nitro messages
 	if err != nil {
 		slog.Error("failed to asciify attachment", slog.Any("error", err))
-		session.ChannelMessageSend(message.ChannelID, ":x: sorry, i couldn't asciify that :grimmace:")
+		channelMessageSend(session, message.ChannelID, ":x: sorry, i couldn't asciify that :grimmace:")
 		return
 	}
-	session.ChannelMessageSend(message.ChannelID, fmt.Sprintf(":white_check_mark: asciified: :nerd:\n```%s```", ascii))
+	channelMessageSend(session, message.ChannelID, fmt.Sprintf(":white_check_mark: asciified: :nerd:\n```%s```", ascii))
 }
 
 // download fetches the attachment from the Discord cdn and writes it to disk
