@@ -92,7 +92,7 @@ func (b *bot) asciify(session *discordgo.Session, message *discordgo.MessageCrea
 	}
 	defer os.Remove(filename)
 
-	ascii, err := asciify.Asciify(filename, 40, 40) // keep it well under the 2000 character limit for non-Nitro messages
+	ascii, err := asciify.Asciify(filename, 60, 30) // keep it well under the 2000 character limit for non-Nitro messages
 	if err != nil {
 		slog.Error("failed to asciify attachment", slog.Any("error", err))
 		channelMessageSend(session, message.ChannelID, ":x: sorry, i couldn't asciify that :grimmace:")
