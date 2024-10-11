@@ -42,7 +42,7 @@ do
             VERBOSE=1
             ;;
         "-d" | "--debug")
-            export DISCORD_BOT_LOG_DEBUG=1
+            export DISCORD_DEV_LOG_DEBUG=1
             ;;
         *)
             command="${command} ${arg}"
