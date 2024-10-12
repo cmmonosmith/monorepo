@@ -62,7 +62,9 @@ func (b *bot) newMessage(session *discordgo.Session, message *discordgo.MessageC
 	case parts[0] == "hi":
 		channelMessageSend(session, message.ChannelID, "sup sup :sunglasses:")
 	case parts[0] == "asciify":
-		b.asciify(session, message)
+		b.asciify(session, message, false)
+	case parts[0] == "asciifile":
+		b.asciify(session, message, true)
 	default:
 		channelMessageSend(session, message.ChannelID, "sorry, i don't follow :sweat_smile:")
 	}
@@ -70,7 +72,7 @@ func (b *bot) newMessage(session *discordgo.Session, message *discordgo.MessageC
 
 // asciify checks for a png attachment, downloads it to a randomly named file, passes it to the asciify package function, then
 // deletes the download
-func (b *bot) asciify(session *discordgo.Session, message *discordgo.MessageCreate) {
+func (b *bot) asciify(session *discordgo.Session, message *discordgo.MessageCreate, toFile bool) {
 	if len(message.Attachments) == 0 {
 		channelMessageSend(session, message.ChannelID, "i can't asciify what you don't send me :disappointed:")
 		return
@@ -92,13 +94,26 @@ func (b *bot) asciify(session *discordgo.Session, message *discordgo.MessageCrea
 	}
 	defer os.Remove(filename)
 
-	ascii, err := asciify.Asciify(filename, 60, 30) // keep it well under the 2000 character limit for non-Nitro messages
+	maxWidth, maxHeight := 60, 30 // default keeps it well under the 2000 character limit for non-Nitro messages
+	if toFile {
+		maxWidth, maxHeight = 256, 128
+	}
+	ascii, err := asciify.Asciify(filename, maxWidth, maxHeight)
 	if err != nil {
 		slog.Error("failed to asciify attachment", slog.Any("error", err))
 		channelMessageSend(session, message.ChannelID, ":x: sorry, i couldn't asciify that :grimmace:")
 		return
 	}
-	channelMessageSend(session, message.ChannelID, fmt.Sprintf(":white_check_mark: asciified: :nerd:\n```%s```", ascii))
+	if toFile {
+		outFilename := fmt.Sprintf("%s.txt", filename[:strings.LastIndex(filename, ".")])
+		if err := b.createTxt(outFilename, ascii); err != nil {
+			channelMessageSend(session, message.ChannelID, ":x: sorry, i couldn't write that file :grimmace:")
+		}
+		defer os.Remove(outFilename)
+		channelMessageSendWithFile(session, message.ChannelID, ":white_check_mark: asciified file: :nerd:", outFilename)
+	} else {
+		channelMessageSend(session, message.ChannelID, fmt.Sprintf(":white_check_mark: asciified: :nerd:\n```%s```", ascii))
+	}
 }
 
 // download fetches the attachment from the Discord cdn and writes it to disk
@@ -121,6 +136,18 @@ func (b *bot) download(url string, filename string) error {
 	if err != nil {
 		return err
 	}
+	return nil
+}
+
+// createTxt creates a .txt file whose contents are a given string
+func (b *bot) createTxt(filename string, content string) error {
+	out, err := os.Create(filename)
+	if err != nil {
+		slog.Error("failed to create asciified file", slog.Any("error", err))
+		return err
+	}
+	defer out.Close()
+	io.WriteString(out, content)
 	return nil
 }
 

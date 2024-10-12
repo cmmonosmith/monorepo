@@ -68,3 +68,15 @@ func channelMessageSend(session *discordgo.Session, channelID string, message st
 		slog.Error("failed to send channel message", slog.Any("error", err))
 	}
 }
+
+func channelMessageSendWithFile(session *discordgo.Session, channelID string, message string, filename string) {
+	// open up the image from disk
+	reader, err := os.Open(filename)
+	if err != nil {
+		slog.Error("failed to open file for sending", slog.Any("error", err))
+		channelMessageSend(session, channelID, ":x: sorry, i couldn't open the file to send :grimmace:")
+		return
+	}
+	defer reader.Close()
+	session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{File: &discordgo.File{Name: filename, Reader: reader}, Content: message})
+}
