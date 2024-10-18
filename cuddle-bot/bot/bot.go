@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
@@ -19,13 +21,35 @@ import (
 type bot struct {
 	name string
 	id   string
+	s    *discordgo.Session
+	m    *messenger
 }
 
+const (
+	cmdHelp      = "help"
+	cmdHi        = "hi"
+	cmdAsciify   = "asciify"
+	cmdAsciifile = "asciifile"
+)
+
+var (
+	//TODO: move commands, arguments, and help docs to config
+	cmdHelps = map[string]string{
+		cmdHelp:      "print this help text, or print more detailed help text for a specific command",
+		cmdHi:        "respond to your casual greeting",
+		cmdAsciify:   "convert a PNG or JPEG image to ascii directly in the response",
+		cmdAsciifile: "convert a PNG or JPEG image to ascii and attach it to the response as a TXT file",
+	}
+	asciifyAttachmentTypes = []string{"image/png", "image/jpeg"}
+)
+
 // New constructs a bot instance with the name from the host environment and the user ID from an active session.
-func New(name string, id string) *bot {
+func newBot(session *discordgo.Session, messenger *messenger) *bot {
 	return &bot{
-		name: name,
-		id:   id,
+		name: session.State.User.Username,
+		id:   session.State.User.ID,
+		s:    session,
+		m:    messenger,
 	}
 }
 
@@ -33,7 +57,7 @@ func New(name string, id string) *bot {
 // by specific keywords or commands.
 // TODO: Unrecognized messages may be handled by context-specific handlers, e.g. when a user is playing a text adventure in a
 // specific channel and doesn't need to mention the bot.
-func (b *bot) newMessage(session *discordgo.Session, message *discordgo.MessageCreate) {
+func (b *bot) newMessage(message *discordgo.MessageCreate) {
 	// ignore own messages
 	if b.id == message.Author.ID {
 		return
@@ -54,65 +78,109 @@ func (b *bot) newMessage(session *discordgo.Session, message *discordgo.MessageC
 
 	// evaluate the rest of the message
 	if len(parts) == 1 {
-		channelMessageSend(session, message.ChannelID, "you have to tell me what you want :weary:")
+		b.m.channelMessageSend(message.ChannelID, "you have to tell me what you want :weary:")
 		return
 	}
 	parts = parts[1:]
 	switch {
-	case parts[0] == "hi":
-		channelMessageSend(session, message.ChannelID, "sup sup :sunglasses:")
-	case parts[0] == "asciify":
-		b.asciify(session, message, false)
-	case parts[0] == "asciifile":
-		b.asciify(session, message, true)
+	case parts[0] == cmdHelp:
+		b.help(message, parts)
+	case parts[0] == cmdHi:
+		b.m.channelMessageSend(message.ChannelID, "sup sup :sunglasses:")
+	case parts[0] == cmdAsciify:
+		b.asciify(message, parts, false)
+	case parts[0] == cmdAsciifile:
+		b.asciify(message, parts, true)
 	default:
-		channelMessageSend(session, message.ChannelID, "sorry, i don't follow :sweat_smile:")
+		b.m.channelMessageSend(message.ChannelID, "sorry, i don't follow :sweat_smile:")
 	}
+}
+
+// printHelp sends the user a quick rundown of the available commands, or a specific command if one was supplied
+func (b *bot) help(message *discordgo.MessageCreate, parts []string) {
+	var sb strings.Builder
+	sb.WriteString("```")
+
+	// if no arguments passed to `help`
+	if len(parts) == 1 {
+		sb.WriteString(fmt.Sprintf("usage: @%s <command> [args ...]\n", b.name))
+		sb.WriteString(fmt.Sprintf("       /%s <command> [args ...]\n\n", b.name))
+		sb.WriteString(fmt.Sprintf("%s: A friendly Discord bot, for fun and development practice\n\n", b.name))
+		sb.WriteString(fmt.Sprintf("%s listens for your mentions or slash commands and responds or acts accordingly\n\n", b.name))
+		sb.WriteString("Commands:\n")
+		for command, description := range cmdHelps {
+			sb.WriteString(fmt.Sprintf("  %-16s%s\n", command, description))
+		}
+	} else {
+		sb.WriteString("specific command help info not implemented yet...")
+	}
+
+	sb.WriteString("```")
+	b.m.channelMessageSend(message.ChannelID, sb.String())
 }
 
 // asciify checks for a png attachment, downloads it to a randomly named file, passes it to the asciify package function, then
 // deletes the download
-func (b *bot) asciify(session *discordgo.Session, message *discordgo.MessageCreate, toFile bool) {
+func (b *bot) asciify(message *discordgo.MessageCreate, parts []string, toFile bool) {
+	// validate parameters
 	if len(message.Attachments) == 0 {
-		channelMessageSend(session, message.ChannelID, "i can't asciify what you don't send me :disappointed:")
+		b.m.channelMessageSend(message.ChannelID, fmt.Sprintf("i can't %s what you don't send me :disappointed:", parts[0]))
 		return
 	} else if len(message.Attachments) > 1 {
-		channelMessageSend(session, message.ChannelID, "only send me one attachment, please... :weary:")
+		b.m.channelMessageSend(message.ChannelID, "only send me one attachment, please... :weary:")
 		return
 	}
 	attachment := message.Attachments[0]
-	if attachment.ContentType != "image/png" {
-		channelMessageSend(session, message.ChannelID, "i can only asciify .png attachments :weary:")
+	if !slices.Contains(asciifyAttachmentTypes, attachment.ContentType) {
+		b.m.channelMessageSend(message.ChannelID, fmt.Sprintf("i can only %s png and jpeg attachments :weary:", parts[0]))
 		return
 	}
-
-	filename := fmt.Sprintf("%s.png", uuid.New().String())
-	if err := b.download(attachment.URL, filename); err != nil {
-		slog.Error("failed to download attachment", slog.Any("error", err))
-		channelMessageSend(session, message.ChannelID, ":x: sorry, i couldn't download your image :grimmace:")
-		return
-	}
-	defer os.Remove(filename)
-
 	maxWidth, maxHeight := 60, 30 // default keeps it well under the 2000 character limit for non-Nitro messages
 	if toFile {
 		maxWidth, maxHeight = 256, 128
 	}
+	if len(parts) > 1 {
+		if len(parts) != 3 {
+			b.m.channelMessageSend(message.ChannelID, fmt.Sprintf("ope, bad parameters, I need `%s [maxWidth maxHeight]` :face_with_open_eyes_and_hand_over_mouth:", parts[0]))
+			return
+		}
+		width, err := strconv.Atoi(parts[1])
+		if err != nil || width > 60 {
+			b.m.channelMessageSend(message.ChannelID, fmt.Sprintf("ope, bad parameters, for `%s [maxWidth maxHeight]` I need `maxWidth` to be an integer no greater than %d :face_with_open_eyes_and_hand_over_mouth:", parts[0], maxWidth))
+			return
+		}
+		height, err := strconv.Atoi(parts[2])
+		if err != nil || height > 30 {
+			b.m.channelMessageSend(message.ChannelID, fmt.Sprintf("ope, bad parameters, for `%s [maxWidth maxHeight]` I need `maxHeight` to be an integer no greater than %d :face_with_open_eyes_and_hand_over_mouth:", parts[0], maxHeight))
+			return
+		}
+		maxWidth, maxHeight = width, height
+	}
+
+	// download attachment
+	filename := fmt.Sprintf("%s.png", uuid.New().String())
+	if err := b.download(attachment.URL, filename); err != nil {
+		slog.Error("failed to download attachment", slog.Any("error", err))
+		b.m.channelMessageSend(message.ChannelID, ":x: sorry, i couldn't download your image :grimmace:")
+		return
+	}
+	defer os.Remove(filename)
+
 	ascii, err := asciify.Asciify(filename, maxWidth, maxHeight)
 	if err != nil {
 		slog.Error("failed to asciify attachment", slog.Any("error", err))
-		channelMessageSend(session, message.ChannelID, ":x: sorry, i couldn't asciify that :grimmace:")
+		b.m.channelMessageSend(message.ChannelID, fmt.Sprintf(":x: sorry, i couldn't %s that :grimmace:", parts[0]))
 		return
 	}
 	if toFile {
 		outFilename := fmt.Sprintf("%s.txt", filename[:strings.LastIndex(filename, ".")])
 		if err := b.createTxt(outFilename, ascii); err != nil {
-			channelMessageSend(session, message.ChannelID, ":x: sorry, i couldn't write that file :grimmace:")
+			b.m.channelMessageSend(message.ChannelID, ":x: sorry, i couldn't write that file :grimmace:")
 		}
 		defer os.Remove(outFilename)
-		channelMessageSendWithFile(session, message.ChannelID, ":white_check_mark: asciified file: :nerd:", outFilename)
+		b.m.channelMessageSendWithFile(message.ChannelID, ":white_check_mark: asciifiled: :nerd:", outFilename)
 	} else {
-		channelMessageSend(session, message.ChannelID, fmt.Sprintf(":white_check_mark: asciified: :nerd:\n```%s```", ascii))
+		b.m.channelMessageSend(message.ChannelID, fmt.Sprintf(":white_check_mark: asciified: :nerd:\n```%s```", ascii))
 	}
 }
 
@@ -152,7 +220,7 @@ func (b *bot) createTxt(filename string, content string) error {
 }
 
 // interactionCreate handles Discord INTERACTION_CREATE events, specifically new application "slash" commands.
-func (b *bot) interactionCreate(session *discordgo.Session, interaction *discordgo.InteractionCreate) {
+func (b *bot) interactionCreate(interaction *discordgo.InteractionCreate) {
 	slog.Debug("created", slog.Any("interaction", interaction))
 
 	// ignore interactions that aren't application commands for now
@@ -186,7 +254,7 @@ func (b *bot) interactionCreate(session *discordgo.Session, interaction *discord
 	slog.Debug("interaction application command data=" + string(json))
 
 	// respond to the command
-	err = session.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+	err = b.s.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
 			Content: ":question: you know as much as I do, dawg...",
@@ -200,10 +268,10 @@ func (b *bot) interactionCreate(session *discordgo.Session, interaction *discord
 
 // registerCommands tells Discord what application "slash" commands users can call when interacting with the bot, which also
 // provides the users with auto-complete and tooltips.
-func (b *bot) registerCommands(session *discordgo.Session) {
+func (b *bot) registerCommands() {
 	command := &discordgo.ApplicationCommand{
 		Name:        b.name,
-		Description: fmt.Sprintf("Information about %s", b.name),
+		Description: fmt.Sprintf("A friendly Discord bot named %s", b.name),
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -212,14 +280,14 @@ func (b *bot) registerCommands(session *discordgo.Session) {
 				Required:    true,
 				Choices: []*discordgo.ApplicationCommandOptionChoice{
 					{
-						Name:  "help",
-						Value: "help",
+						Name:  cmdHelp,
+						Value: cmdHelp,
 					},
 				},
 			},
 		},
 	}
-	_, err := session.ApplicationCommandCreate(instance.id, "", command)
+	_, err := b.s.ApplicationCommandCreate(instance.id, "", command)
 	if err != nil {
 		slog.Error("failed to create slash command", slog.Any("error", err))
 	}

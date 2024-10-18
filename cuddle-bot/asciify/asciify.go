@@ -2,19 +2,25 @@ package asciify
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"os"
+	"slices"
 	"strings"
 
 	// import for initialization side-effects
-	//_ "image/jpeg"
+	_ "image/jpeg"
 	_ "image/png"
 )
 
 const (
-	chars             = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. "
-	pigeonhole_factor = float32(len(chars)) / 256
+	gradient      = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. "
+	gradientRatio = float32(len(gradient)) / 256
+)
+
+var (
+	extensions = []string{".png", ".jpg", ".jpeg"}
 )
 
 // Asciify converts an image to grayscale, then picks pixels at regular intervals to convert to a text character roughly
@@ -22,6 +28,11 @@ const (
 // ratio. The maxWidth and maxHeight parameters are in "character width" and "character height" units respectively, so the
 // output height of a square image will be output width / 2.
 func Asciify(filename string, maxWidth int, maxHeight int) (string, error) {
+	// check some inputs
+	extension := strings.ToLower(filename[strings.LastIndex(filename, "."):])
+	if !slices.Contains(extensions, extension) {
+		return "", fmt.Errorf("file (%s) must be of type png (.png) or jpeg (.jpg/.jpeg)", filename)
+	}
 	if maxWidth == 0 || maxHeight == 0 {
 		return "", errors.New("ascii max size must be wider/taller than 0")
 	}
@@ -47,9 +58,9 @@ func Asciify(filename string, maxWidth int, maxHeight int) (string, error) {
 
 	// adjust output size to match the aspect ratio of the input image
 	if inWidth > inHeight {
-		outHeight = outWidth / float32(inWidth) * float32(inHeight)
+		outHeight = outWidth / inWidth * inHeight
 	} else if inHeight > inWidth {
-		outWidth = outHeight / float32(inHeight) * float32(inWidth)
+		outWidth = outHeight / inHeight * inWidth
 	}
 
 	// make sure rounding didn't wreck us somehow
@@ -65,7 +76,7 @@ func Asciify(filename string, maxWidth int, maxHeight int) (string, error) {
 		yf = float32(y)
 		for x := 0; x < xMax; x++ {
 			gray := color.GrayModel.Convert(m.At(int(float32(x)/outWidth*inWidth), int(yf/outHeight*inHeight))).(color.Gray)
-			sb.WriteByte(chars[uint8(float32(gray.Y)*pigeonhole_factor)])
+			sb.WriteByte(gradient[uint8(float32(gray.Y)*gradientRatio)])
 		}
 		sb.WriteString("\n")
 	}
